@@ -10,12 +10,12 @@ class KojoSimulator:
         self.next_arrival=0 # tiempo del próximo arribo de un cliente
         self.clients_count=0 # cantidad de clientes que han llegado (se usa como índice)
         self.arrivals=[] # la posición i contiene el tiempo de arribo del cliente i+1
-        self.departures=[] # la posición i contiene el tiempo de salida del cliente i+1
+        self.departures=[] # la posición i contiene el tiempo de salida de la cola del cliente i+1
         self.current_state=[] # [N, c1, c2, c3] donde N es la cantidad de clientes siendo atendidos y c_i denota el cliente siendo atendido por el empleado i 
         self.employees_state=[] # esta lista lleva los tiempos actuales de preparación de comida para cada empleado
         self.clients=queue.Queue() # cola de los clientes que no han sido atendidos
 
-    def start_simulation(self, arrival_rate=0.2, peak_hours_rate=0.3, helper=False):
+    def start_simulation(self, arrival_rate, peak_hours_rate, helper=False, showlog = False):
         if peak_hours_rate <= arrival_rate:
             raise Exception("La frecuencia en horario pico debe ser mayor que en horario regular")
         max_value = sys.maxsize
@@ -34,64 +34,72 @@ class KojoSimulator:
                 if self.is_final_state():
                     break
                 elif self.current_time >= self.end_time:
-                    print("!! Horario de cierre. No se pueden atender más clientes")
-                    self.next_arrival = max_value
-                    print("Clientes en cola: " + str(self.clients.qsize()))     
-                    print("Clientes siendo atendidos: " + str(self.current_state[0]))                                     
-                    #print(str(self.current_time))
-                    #for i in self.employees_state:
-                    #    print(str(i))
+                    if showlog:
+                        print("!! Horario de cierre. No se pueden atender más clientes")
+                        print("Clientes en cola: " + str(self.clients.qsize()))     
+                        print("Clientes siendo atendidos: " + str(self.current_state[0]))   
+                    self.next_arrival = max_value                                         
                     continue
                 else:
                     self.clients_count += 1
                     self.arrivals.append(self.current_time)
-                    self.departures.append(0)
                     #standard_time = self.convert_to_hours()
-                    print("... Cliente " + str(self.clients_count) + " llega en " + str(self.current_time))
-                    #print("... Cliente "+ str(self.clients_count) + " llega a las  " +  str(standard_time[0]) + ":" + str(standard_time[1]))
+                    if showlog:
+                        print("... Cliente " + str(self.clients_count) + " llega en " + str(self.current_time))
+                        #print("... Cliente "+ str(self.clients_count) + " llega a las  " +  str(standard_time[0]) + ":" + str(standard_time[1]))
                     if self.is_peak_time: # en horario pico
                         self.next_arrival = self.current_time + self.generate_exponential(peak_hours_rate)
                         if helper and self.current_state[0] < 3:
+                            self.departures.append(self.current_time)
                             self.generate_order(self.clients_count, 3)
                         elif not helper and self.current_state[0] < 2:
+                            self.departures.append(self.current_time)
                             self.generate_order(self.clients_count, 2)
                         else:
+                            self.departures.append(0)
                             self.clients.put(self.clients_count)                                 
                     else: # fuera de horario pico
                         self.next_arrival = self.current_time + self.generate_exponential(arrival_rate)
                         if self.current_state[0] < 2:
+                            self.departures.append(self.current_time)
                             self.generate_order(self.clients_count, 2)
                         else:
-                            self.clients.put(self.clients_count)        
+                            if self.current_state[1] == 0 or self.current_state[2] == 0:
+                                self.departures.append(self.current_time)
+                                self.generate_order(self.clients_count, 2)
+                            else:    
+                                self.departures.append(0)
+                                self.clients.put(self.clients_count)        
             # el próximo evento es la salida de un cliente      
             else:  
                 employee_index = self.employees_state.index(min_value) # índice del empleado que terminó el pedido
                 self.current_time = min_value
-                client_index = self.current_state[employee_index + 1] - 1
-                self.departures[client_index] = self.current_time
                 self.current_state[0] -= 1
                 self.current_state[employee_index + 1] = 0
                 self.employees_state[employee_index] = max_value
                 #standard_time = self.convert_to_hours()
-                print("... Cliente " + str(client_index+1) + " sale en " + str(self.current_time))
-                #print("... Cliente "+ str(client_index+1) + " sale a las  " +  str(standard_time[0]) + ":" + str(standard_time[1]))
+                if showlog:
+                    print("... Cliente " + str(client_index+1) + " sale en " + str(self.current_time))
+                    #print("... Cliente "+ str(client_index+1) + " sale a las  " +  str(standard_time[0]) + ":" + str(standard_time[1]))
                 if self.is_final_state():
                     break
                 elif not self.clients.empty() and self.current_time < self.end_time: # hay clientes en la cola y no es horario de cierre
                     if self.is_peak_time() and helper: # si es horario pico y tenemos ayudante
                         new_client = self.clients.get()
+                        self.departures[new_client-1] = self.current_time
                         self.generate_order(new_client, 3)
                     else: # si solamente podemos asignar pedidos a los dos primeros empleados
                         if self.current_state[0] < 2:
                             new_client = self.clients.get()
+                            self.departures[new_client-1] = self.current_time
                             self.generate_order(new_client, 2)  
                         else:
                             if self.current_state[1] == 0 or self.current_state[2] == 0: # si quedó un empleado principal libre
                                 new_client = self.clients.get()
+                                self.departures[new_client-1] = self.current_time
                                 self.generate_order(new_client, 2)    
                 else:
-                    continue               
-        return           
+                    continue          
             
     def reset(self):
         self.current_time=0
@@ -102,7 +110,7 @@ class KojoSimulator:
         self.current_state=[]
         self.employees_state=[]
         self.clients=queue.Queue()
-        return
+
     # función que devuelve True si es horario pico y False en caso contrario
     def is_peak_time(self):
         return (self.current_time >= 90 and self.current_time <= 210) or (self.current_time >= 420 and self.current_time <= 540)
@@ -138,7 +146,6 @@ class KojoSimulator:
                 self.current_state[i]=client
                 self.current_state[0] += 1
                 break           
-        return
 
     # imprime el porcentaje de clientes q demoraron más de 5 minutos en el local
     def get_stats(self):
@@ -153,7 +160,25 @@ class KojoSimulator:
         return round((dissatisfied_clients * 100) / total_clients, 1)
 
 if __name__ == "__main__":
+    inputs = [(0.5, 1), (0.333, 0.5), (0.25, 0.333), (0.2, 0.25), (0.125, 0.2)]
     simulator = KojoSimulator()
-    simulator.start_simulation(arrival_rate=0.2, peak_hours_rate=0.4, helper=True)
-    stat = simulator.get_stats()
-    print("El porcentaje de clientes que demoraron más de 5 minutos fue: " + str(stat))
+    output = open("docs/output.txt", 'w')
+    output.write('        Inputs         |          Results         \n')
+    output.write('lambda | lambda (peak) | 2 employees | 3 employees\n\n')
+    for i in range(len(inputs)):
+        p1 = 0 # Suma de los porcentajes calculados para simulaciones sin tercer empleado
+        p2 = 0 # Suma de los porcentajes calculados para simulaciones con ayudante
+        for j in range(50):        
+            simulator.start_simulation(inputs[i][0], inputs[i][1])
+            stat = simulator.get_stats()
+            p1 += stat
+            simulator.reset()
+            simulator.start_simulation(inputs[i][0], inputs[i][1], helper=True)
+            stat = simulator.get_stats()
+            p2 += stat
+            simulator.reset()
+        r1 = round(p1 / 50, 2)
+        r2 = round(p2 / 50, 2)
+        output.write("{0}   |   {1}   |   {2}%   |   {3}%\n".format(str(inputs[i][0]), str(inputs[i][1]), str(r1), str(r2)))
+    output.close()    
+
